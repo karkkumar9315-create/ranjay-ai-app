@@ -1,0 +1,6 @@
+{
+  "name": "RANJAY AI",
+  "description": "Your AI Creator Studio for YouTube, Shorts, Instagram Reels, and Facebook Reels. Create, edit, and grow with AI tools.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
