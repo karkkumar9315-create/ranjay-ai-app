@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import fs from 'fs';
 import path from 'path';
 
@@ -9,7 +9,8 @@ export const apiRouter = Router();
 function getGenAI() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY environment variable is missing.');
+    console.error('[GEMINI_API_KEY Error] GEMINI_API_KEY environment variable is not defined.');
+    throw new Error('GEMINI_API_KEY environment variable is missing on server. Please configure GEMINI_API_KEY in Vercel settings.');
   }
   return new GoogleGenAI({
     apiKey,
@@ -19,6 +20,35 @@ function getGenAI() {
       },
     },
   });
+}
+
+// Helper to safely parse JSON response from Gemini, removing markdown fences or trailing junk
+function cleanParseJson(text: string | undefined, fallback: any = {}) {
+  if (!text) return fallback;
+  try {
+    return JSON.parse(text);
+  } catch (e1) {
+    // Try stripping markdown code blocks ```json ... ```
+    const cleaned = text
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch (e2) {
+      // Try extracting first { ... } or [ ... ]
+      const jsonMatch = cleaned.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+      if (jsonMatch) {
+        try {
+          return JSON.parse(jsonMatch[1]);
+        } catch (e3) {
+          console.error('Failed to parse extracted JSON block from model response:', jsonMatch[1]);
+        }
+      }
+      console.error('Failed to parse Gemini response text as JSON:', text);
+      return fallback;
+    }
+  }
 }
 
 // Local filesystem projects database helper
@@ -61,55 +91,83 @@ function saveProjectsToFile(projects: any[]) {
 }
 
 // -------------------------------------------------------------
+// HEALTH CHECK API
+// -------------------------------------------------------------
+apiRouter.get(['/health', '/api/health'], (req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    geminiKeyConfigured: !!process.env.GEMINI_API_KEY,
+    environment: process.env.VERCEL ? 'vercel' : 'local',
+  });
+});
+
+// -------------------------------------------------------------
 // PROJECTS API
 // -------------------------------------------------------------
-apiRouter.get('/projects', (req: Request, res: Response) => {
-  const projects = getSavedProjects();
-  res.json({ success: true, projects });
-});
-
-apiRouter.post('/projects', (req: Request, res: Response) => {
-  const { title, type, content, data, topic, platform, language } = req.body;
-  if (!title) {
-    res.status(400).json({ error: 'Title is required' });
-    return;
+apiRouter.get(['/projects', '/api/projects'], (req: Request, res: Response) => {
+  try {
+    const projects = getSavedProjects();
+    res.json({ success: true, projects });
+  } catch (err: any) {
+    console.error('Get projects error:', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to fetch projects' });
   }
-  const projects = getSavedProjects();
-  const newProject = {
-    id: 'proj_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
-    title,
-    type: type || 'Script',
-    topic: topic || title,
-    platform: platform || 'YouTube',
-    language: language || 'Hinglish',
-    content: content || data || {},
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  projects.unshift(newProject);
-  saveProjectsToFile(projects);
-  res.json({ success: true, project: newProject });
 });
 
-apiRouter.delete('/projects/:id', (req: Request, res: Response) => {
-  const { id } = req.params;
-  let projects = getSavedProjects();
-  projects = projects.filter((p: any) => p.id !== id);
-  saveProjectsToFile(projects);
-  res.json({ success: true, id });
+apiRouter.post(['/projects', '/api/projects'], (req: Request, res: Response) => {
+  try {
+    const { title, type, content, data, topic, platform, language } = req.body || {};
+    if (!title) {
+      res.status(400).json({ success: false, error: 'Title is required' });
+      return;
+    }
+    const projects = getSavedProjects();
+    const newProject = {
+      id: 'proj_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      title,
+      type: type || 'Script',
+      topic: topic || title,
+      platform: platform || 'YouTube',
+      language: language || 'Hinglish',
+      content: content || data || {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    projects.unshift(newProject);
+    saveProjectsToFile(projects);
+    res.json({ success: true, project: newProject });
+  } catch (err: any) {
+    console.error('Save project error:', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to save project' });
+  }
+});
+
+apiRouter.delete(['/projects/:id', '/api/projects/:id'], (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    let projects = getSavedProjects();
+    projects = projects.filter((p: any) => p.id !== id);
+    saveProjectsToFile(projects);
+    res.json({ success: true, id });
+  } catch (err: any) {
+    console.error('Delete project error:', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to delete project' });
+  }
 });
 
 // -------------------------------------------------------------
 // 0. AI FACT CHECKER & CONTENT ACCURACY ENDPOINT
 // -------------------------------------------------------------
-apiRouter.post('/fact-check', async (req: Request, res: Response) => {
+apiRouter.post(['/fact-check', '/api/fact-check'], async (req: Request, res: Response) => {
   try {
-    const { text, factCheckMode } = req.body;
+    const { text } = req.body || {};
     if (!text || !text.trim()) {
-      res.status(400).json({ error: 'Text/Script content is required for fact checking.' });
+      res.status(400).json({ success: false, error: 'Text/Script content is required for fact checking.' });
       return;
     }
 
+    console.log(`[Fact Check] Processing ${text.length} chars...`);
     const ai = getGenAI();
     const prompt = `
 You are RANJAY AI's Chief Fact Checker & Content Accuracy Auditor.
@@ -182,25 +240,26 @@ Return a JSON object:
       },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = cleanParseJson(response.text);
     res.json({ success: true, result: parsed });
   } catch (error: any) {
     console.error('Fact checking error:', error);
-    res.status(500).json({ error: error.message || 'Failed to fact check content' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to fact check content' });
   }
 });
 
 // -------------------------------------------------------------
 // 1. AI SCRIPT GENERATOR
 // -------------------------------------------------------------
-apiRouter.post('/generate-script', async (req: Request, res: Response) => {
+apiRouter.post(['/generate-script', '/api/generate-script'], async (req: Request, res: Response) => {
   try {
-    const { topic, platform, duration, language, style, factCheckMode } = req.body;
+    const { topic, platform, duration, language, style, factCheckMode } = req.body || {};
     if (!topic) {
-      res.status(400).json({ error: 'Topic is required' });
+      res.status(400).json({ success: false, error: 'Topic is required' });
       return;
     }
 
+    console.log(`[Generate Script] Topic: "${topic}" Platform: ${platform || 'YouTube'}`);
     const ai = getGenAI();
     const factCheckInstruction = factCheckMode !== false ? `
 FACT-CHECK MODE IS ACTIVE:
@@ -251,25 +310,26 @@ Ensure the language is naturally written in ${language || 'Hinglish'}. Write eng
       },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = cleanParseJson(response.text);
     res.json({ success: true, script: parsed });
   } catch (error: any) {
     console.error('Script generation error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate script' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to generate script' });
   }
 });
 
 // -------------------------------------------------------------
 // 2. CONTENT IDEA GENERATOR (20 Ideas)
 // -------------------------------------------------------------
-apiRouter.post('/generate-ideas', async (req: Request, res: Response) => {
+apiRouter.post(['/generate-ideas', '/api/generate-ideas'], async (req: Request, res: Response) => {
   try {
-    const { niche, language } = req.body;
+    const { niche, language } = req.body || {};
     if (!niche) {
-      res.status(400).json({ error: 'Niche is required' });
+      res.status(400).json({ success: false, error: 'Niche is required' });
       return;
     }
 
+    console.log(`[Generate Ideas] Niche: "${niche}"`);
     const ai = getGenAI();
     const prompt = `
 You are RANJAY AI, an expert content strategist.
@@ -306,20 +366,20 @@ Return a JSON array of 20 objects, each having:
       },
     });
 
-    const parsed = JSON.parse(response.text || '[]');
+    const parsed = cleanParseJson(response.text, []);
     res.json({ success: true, ideas: parsed });
   } catch (error: any) {
     console.error('Ideas generation error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate content ideas' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to generate content ideas' });
   }
 });
 
 // -------------------------------------------------------------
 // 3. AI THUMBNAIL ASSISTANT (Multimodal Image Analysis + Prompt)
 // -------------------------------------------------------------
-apiRouter.post('/analyze-thumbnail', async (req: Request, res: Response) => {
+apiRouter.post(['/analyze-thumbnail', '/api/analyze-thumbnail'], async (req: Request, res: Response) => {
   try {
-    const { imageBase64, mimeType, description, format } = req.body;
+    const { imageBase64, mimeType, description, format } = req.body || {};
     const ai = getGenAI();
 
     let contents: any;
@@ -370,27 +430,27 @@ Return a JSON object:
       },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = cleanParseJson(response.text);
     res.json({ success: true, concept: parsed });
   } catch (error: any) {
     console.error('Thumbnail analysis error:', error);
-    res.status(500).json({ error: error.message || 'Failed to analyze thumbnail' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to analyze thumbnail' });
   }
 });
 
 // -------------------------------------------------------------
 // 4. IMAGE GENERATION ENDPOINT
 // -------------------------------------------------------------
-apiRouter.post('/generate-image', async (req: Request, res: Response) => {
+apiRouter.post(['/generate-image', '/api/generate-image'], async (req: Request, res: Response) => {
   try {
-    const { prompt, aspectRatio } = req.body;
+    const { prompt, aspectRatio } = req.body || {};
     if (!prompt) {
-      res.status(400).json({ error: 'Prompt is required' });
+      res.status(400).json({ success: false, error: 'Prompt is required' });
       return;
     }
 
+    console.log(`[Generate Image] Prompt: "${prompt.substring(0, 40)}..."`);
     const ai = getGenAI();
-    // Use gemini-3.1-flash-lite-image
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-lite-image',
       contents: prompt,
@@ -417,8 +477,7 @@ apiRouter.post('/generate-image', async (req: Request, res: Response) => {
     } else {
       res.status(400).json({
         success: false,
-        error: 'Image generation did not return image data.',
-        prompt,
+        error: 'Image generation model did not return image data.',
       });
     }
   } catch (error: any) {
@@ -426,7 +485,6 @@ apiRouter.post('/generate-image', async (req: Request, res: Response) => {
     res.status(500).json({
       success: false,
       error: error.message || 'Image generation model error. Check prompt or API limits.',
-      prompt: req.body.prompt,
     });
   }
 });
@@ -434,14 +492,15 @@ apiRouter.post('/generate-image', async (req: Request, res: Response) => {
 // -------------------------------------------------------------
 // 5. SHORTS MAKER
 // -------------------------------------------------------------
-apiRouter.post('/generate-shorts', async (req: Request, res: Response) => {
+apiRouter.post(['/generate-shorts', '/api/generate-shorts'], async (req: Request, res: Response) => {
   try {
-    const { topic, duration, language, style, factCheckMode } = req.body;
+    const { topic, duration, language, style, factCheckMode } = req.body || {};
     if (!topic) {
-      res.status(400).json({ error: 'Topic is required' });
+      res.status(400).json({ success: false, error: 'Topic is required' });
       return;
     }
 
+    console.log(`[Generate Shorts] Topic: "${topic}"`);
     const ai = getGenAI();
     const factCheckInstruction = factCheckMode !== false ? `
 FACT-CHECK & ACCURACY MANDATE:
@@ -489,25 +548,26 @@ Return a JSON object:
       },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = cleanParseJson(response.text);
     res.json({ success: true, shortsPackage: parsed });
   } catch (error: any) {
     console.error('Shorts generation error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate Shorts package' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to generate Shorts package' });
   }
 });
 
 // -------------------------------------------------------------
 // 6. CAPCUT / VIDEO EDITING ASSISTANT
 // -------------------------------------------------------------
-apiRouter.post('/generate-editing-plan', async (req: Request, res: Response) => {
+apiRouter.post(['/generate-editing-plan', '/api/generate-editing-plan'], async (req: Request, res: Response) => {
   try {
-    const { footageDescription, videoType } = req.body;
+    const { footageDescription, videoType } = req.body || {};
     if (!footageDescription) {
-      res.status(400).json({ error: 'Footage description is required' });
+      res.status(400).json({ success: false, error: 'Footage description is required' });
       return;
     }
 
+    console.log(`[Editing Plan] Footages: "${footageDescription.substring(0, 40)}..."`);
     const ai = getGenAI();
     const prompt = `
 You are RANJAY AI Lead Video Editor (CapCut & Premiere Pro Master).
@@ -539,25 +599,26 @@ Return a JSON object:
       },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = cleanParseJson(response.text);
     res.json({ success: true, editingPlan: parsed });
   } catch (error: any) {
     console.error('Editing plan generation error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate editing plan' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to generate editing plan' });
   }
 });
 
 // -------------------------------------------------------------
 // 7. TITLE GENERATOR (10 Options)
 // -------------------------------------------------------------
-apiRouter.post('/generate-titles', async (req: Request, res: Response) => {
+apiRouter.post(['/generate-titles', '/api/generate-titles'], async (req: Request, res: Response) => {
   try {
-    const { topic, language } = req.body;
+    const { topic, language } = req.body || {};
     if (!topic) {
-      res.status(400).json({ error: 'Topic is required' });
+      res.status(400).json({ success: false, error: 'Topic is required' });
       return;
     }
 
+    console.log(`[Generate Titles] Topic: "${topic}"`);
     const ai = getGenAI();
     const prompt = `
 You are RANJAY AI Video Title Strategist.
@@ -586,25 +647,26 @@ Return a JSON array of 10 title objects:
       },
     });
 
-    const parsed = JSON.parse(response.text || '[]');
+    const parsed = cleanParseJson(response.text, []);
     res.json({ success: true, titles: parsed });
   } catch (error: any) {
     console.error('Title generation error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate titles' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to generate titles' });
   }
 });
 
 // -------------------------------------------------------------
 // 8. DESCRIPTION & CAPTION & HASHTAG GENERATOR
 // -------------------------------------------------------------
-apiRouter.post('/generate-seo', async (req: Request, res: Response) => {
+apiRouter.post(['/generate-seo', '/api/generate-seo'], async (req: Request, res: Response) => {
   try {
-    const { topic, details, language } = req.body;
+    const { topic, details, language } = req.body || {};
     if (!topic) {
-      res.status(400).json({ error: 'Topic is required' });
+      res.status(400).json({ success: false, error: 'Topic is required' });
       return;
     }
 
+    console.log(`[Generate SEO] Topic: "${topic}"`);
     const ai = getGenAI();
     const prompt = `
 You are RANJAY AI YouTube & Social Media SEO Optimization Expert.
@@ -635,25 +697,26 @@ Return a JSON object:
       },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = cleanParseJson(response.text);
     res.json({ success: true, seo: parsed });
   } catch (error: any) {
     console.error('SEO generation error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate SEO metadata' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to generate SEO metadata' });
   }
 });
 
 // -------------------------------------------------------------
 // 9. COMPLETE VIDEO CREATOR (Master All-In-One Feature)
 // -------------------------------------------------------------
-apiRouter.post('/generate-complete-video', async (req: Request, res: Response) => {
+apiRouter.post(['/generate-complete-video', '/api/generate-complete-video'], async (req: Request, res: Response) => {
   try {
-    const { topic, platform, duration, language, factCheckMode } = req.body;
+    const { topic, platform, duration, language, factCheckMode } = req.body || {};
     if (!topic) {
-      res.status(400).json({ error: 'Topic is required' });
+      res.status(400).json({ success: false, error: 'Topic is required' });
       return;
     }
 
+    console.log(`[Generate Complete Video] Topic: "${topic}"`);
     const ai = getGenAI();
     const factCheckInstruction = factCheckMode !== false ? `
 CRITICAL FACT-CHECKING MANDATE (FACTS & ACCURACY FIRST):
@@ -718,20 +781,21 @@ Return a JSON object containing ALL 11 elements:
       },
     });
 
-    const parsed = JSON.parse(response.text || '{}');
+    const parsed = cleanParseJson(response.text);
     res.json({ success: true, completePackage: parsed });
   } catch (error: any) {
     console.error('Complete video package error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate complete video package' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to generate complete video package' });
   }
 });
 
 // -------------------------------------------------------------
 // 10. AI CREATOR CHAT ("Mohtarma / Ranjay AI Assistant")
 // -------------------------------------------------------------
-apiRouter.post('/creator-chat', async (req: Request, res: Response) => {
+apiRouter.post(['/creator-chat', '/api/creator-chat'], async (req: Request, res: Response) => {
   try {
-    const { messages, userPrompt, language } = req.body;
+    const { messages, userPrompt, language } = req.body || {};
+    console.log(`[Creator Chat] ${userPrompt || 'message received'}`);
     const ai = getGenAI();
 
     const systemInstruction = `
@@ -770,24 +834,25 @@ IDENTITY & PERSONALITY:
       },
     });
 
-    res.json({ success: true, reply: response.text });
+    res.json({ success: true, reply: response.text || 'Namaste!' });
   } catch (error: any) {
     console.error('Creator chat error:', error);
-    res.status(500).json({ error: error.message || 'Chat assistant error' });
+    res.status(500).json({ success: false, error: error.message || 'Chat assistant error' });
   }
 });
 
 // -------------------------------------------------------------
 // 11. VOICEOVER TTS ENDPOINT
 // -------------------------------------------------------------
-apiRouter.post('/generate-tts', async (req: Request, res: Response) => {
+apiRouter.post(['/generate-tts', '/api/generate-tts'], async (req: Request, res: Response) => {
   try {
-    const { text, voice } = req.body;
+    const { text, voice } = req.body || {};
     if (!text) {
-      res.status(400).json({ error: 'Text is required for TTS' });
+      res.status(400).json({ success: false, error: 'Text is required for TTS' });
       return;
     }
 
+    console.log(`[TTS Generation] Text length: ${text.length}`);
     const ai = getGenAI();
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-tts-preview',
@@ -806,7 +871,7 @@ apiRouter.post('/generate-tts', async (req: Request, res: Response) => {
     if (base64Audio) {
       res.json({ success: true, base64Audio });
     } else {
-      res.status(400).json({ success: false, error: 'TTS model did not return audio.' });
+      res.status(400).json({ success: false, error: 'TTS model did not return audio data.' });
     }
   } catch (error: any) {
     console.error('TTS API error:', error);

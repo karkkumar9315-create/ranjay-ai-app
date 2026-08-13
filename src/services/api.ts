@@ -19,12 +19,47 @@ async function fetchApi<T>(endpoint: string, body?: any, method = 'POST'): Promi
   if (body) {
     options.body = JSON.stringify(body);
   }
-  const res = await fetch(endpoint, options);
-  const data = await res.json();
-  if (!res.ok || data.error) {
-    throw new Error(data.error || `API request failed: ${res.statusText}`);
+
+  let res: Response;
+  try {
+    res = await fetch(endpoint, options);
+  } catch (networkErr: any) {
+    console.error(`Network error requesting ${endpoint}:`, networkErr);
+    throw new Error(`Network connection error: ${networkErr?.message || 'Failed to connect to API'}`);
   }
-  return data;
+
+  const responseText = await res.text();
+  let data: any = {};
+
+  if (responseText && responseText.trim().length > 0) {
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error(`Non-JSON response received from ${endpoint} (Status ${res.status}):`, responseText);
+      // Strip HTML tags and summarize response for clear error reporting
+      const textSnippet = responseText
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .substring(0, 200);
+
+      const errorMessage =
+        textSnippet ||
+        `Server returned invalid response format (Status ${res.status} ${res.statusText})`;
+
+      throw new Error(`[API Error ${res.status}] ${errorMessage}`);
+    }
+  }
+
+  if (!res.ok || data.error || data.success === false) {
+    const errorMsg =
+      data.error ||
+      data.message ||
+      `API request failed with status ${res.status} (${res.statusText || 'Error'})`;
+    throw new Error(errorMsg);
+  }
+
+  return data as T;
 }
 
 export async function factCheckApi(params: {
