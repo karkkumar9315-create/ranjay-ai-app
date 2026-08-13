@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
-import { apiRouter } from './server/apiRouter.ts';
+import { apiRouter } from './server/apiRouter';
 
 dotenv.config();
 

@@ -22,15 +22,21 @@ function getGenAI() {
 }
 
 // Local filesystem projects database helper
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DATA_DIR = process.env.VERCEL
+  ? path.join('/tmp', 'data')
+  : path.resolve(process.cwd(), 'data');
 const PROJECTS_FILE = path.join(DATA_DIR, 'projects.json');
 
 function ensureDataFile() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(PROJECTS_FILE)) {
-    fs.writeFileSync(PROJECTS_FILE, JSON.stringify([]), 'utf-8');
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (!fs.existsSync(PROJECTS_FILE)) {
+      fs.writeFileSync(PROJECTS_FILE, JSON.stringify([]), 'utf-8');
+    }
+  } catch (err) {
+    console.warn('Could not initialize local projects file:', err);
   }
 }
 

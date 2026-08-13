@@ -160,6 +160,46 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({ project, onClose, on
           </div>
         )}
 
+        {/* Fact Check Analysis Section */}
+        {c.summary && Array.isArray(c.claims) && (
+          <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-extrabold text-cyan-400 uppercase tracking-wider block">🔎 Fact Check & Accuracy Breakdown</span>
+              <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded text-[11px] font-bold">
+                Score: {c.summary.accuracyScore}%
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-[10px]">
+              <div className="bg-slate-900 p-2 rounded border border-slate-800">
+                <span className="text-slate-400 block">Total Claims</span>
+                <strong className="text-slate-200 text-xs">{c.summary.totalClaims}</strong>
+              </div>
+              <div className="bg-emerald-500/10 p-2 rounded border border-emerald-500/20 text-emerald-300">
+                <span className="block">🟢 Verified</span>
+                <strong className="text-xs">{c.summary.verifiedClaims}</strong>
+              </div>
+              <div className="bg-amber-500/10 p-2 rounded border border-amber-500/20 text-amber-300">
+                <span className="block">🟡 Unverified</span>
+                <strong className="text-xs">{c.summary.needsVerificationClaims}</strong>
+              </div>
+              <div className="bg-rose-500/10 p-2 rounded border border-rose-500/20 text-rose-300">
+                <span className="block">🔴 Incorrect</span>
+                <strong className="text-xs">{c.summary.likelyIncorrectClaims}</strong>
+              </div>
+            </div>
+
+            {c.fixedScript && (
+              <div className="pt-2 border-t border-slate-800">
+                <span className="text-[10px] font-bold text-purple-400 block mb-1">FACT-CHECKED FIXED SCRIPT</span>
+                <p className="bg-slate-900 p-2.5 rounded border border-slate-800 font-mono text-[11px] text-slate-200 whitespace-pre-line leading-relaxed">
+                  {c.fixedScript}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Complete Script / Main Text Section */}
         {(c.script || c.concept || c.timelineOverview || c.voiceoverText) && (
           <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
